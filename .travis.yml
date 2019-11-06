@@ -1,0 +1,8 @@
+language: rust
+
+rust:
+  - stable
+os:
+  - windows
+  - linux
+  - osx

@@ -19,7 +19,7 @@ const HEIGHT: u32 = 600;
 const APP_NAME: &str = "Triangle";
 
 fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
+    simple_logger::init()?;
     Triangle::new()?.run()?;
     Ok(())
 }
@@ -55,6 +55,7 @@ struct Triangle {
 
 impl Triangle {
     fn new() -> Result<Self, Box<dyn Error>> {
+        log::info!("Create application");
         // Setup window
         let (window, events_loop) = create_window();
 
@@ -176,6 +177,7 @@ impl Triangle {
     }
 
     fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {
+        log::debug!("Recreating the swapchain");
         // Wait for the window to be maximized before recreating the swapchain
         loop {
             if let Some(LogicalSize { width, height }) = self.window.get_inner_size() {
@@ -266,6 +268,7 @@ impl Triangle {
     }
 
     fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        log::info!("Starting application");
         // Main loop
         loop {
             // Processing events
@@ -344,6 +347,7 @@ impl Triangle {
             }
         }
 
+        log::info!("Stopping application");
         Ok(())
     }
 }
@@ -367,6 +371,7 @@ impl Drop for Triangle {
 }
 
 fn create_window() -> (Window, EventsLoop) {
+    log::debug!("Creating window and event loop");
     let events_loop = EventsLoop::new();
     let window = WindowBuilder::new()
         .with_title(APP_NAME)
@@ -381,6 +386,7 @@ fn create_window() -> (Window, EventsLoop) {
 fn create_vulkan_instance(
     entry: &Entry,
 ) -> Result<(Instance, DebugReport, vk::DebugReportCallbackEXT), Box<dyn Error>> {
+    log::debug!("Creating vulkan instance");
     // Vulkan instance
     let app_name = CString::new(APP_NAME)?;
     let engine_name = CString::new("No Engine")?;
@@ -440,6 +446,7 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
     surface: &Surface,
     surface_khr: vk::SurfaceKHR,
 ) -> Result<(vk::PhysicalDevice, u32, u32), Box<dyn Error>> {
+    log::debug!("Creating vulkan physical device");
     let devices = unsafe { instance.enumerate_physical_devices()? };
     let mut graphics = None;
     let mut present = None;
@@ -510,7 +517,7 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
     unsafe {
         let props = instance.get_physical_device_properties(device);
         let device_name = CStr::from_ptr(props.device_name.as_ptr());
-        log::info!("Selected physical device: {:?}", device_name);
+        log::debug!("Selected physical device: {:?}", device_name);
     }
 
     Ok((device, graphics.unwrap(), present.unwrap()))
@@ -522,6 +529,7 @@ fn create_vulkan_device_and_graphics_and_present_qs(
     graphics_q_index: u32,
     present_q_index: u32,
 ) -> Result<(Device, vk::Queue, vk::Queue), Box<dyn Error>> {
+    log::debug!("Creating vulkan device and graphics and present queues");
     let queue_priorities = [1.0f32];
     let queue_create_infos = {
         let mut indices = vec![graphics_q_index, present_q_index];
@@ -570,6 +578,7 @@ fn create_vulkan_swapchain(
     ),
     Box<dyn Error>,
 > {
+    log::debug!("Creating vulkan swapchain");
     // Swapchain format
     let format = {
         let formats =
@@ -589,9 +598,22 @@ fn create_vulkan_swapchain(
                 .unwrap_or(&formats[0])
         }
     };
+    log::debug!("Swapchain format: {:?}", format);
 
     // Swapchain present mode
-    let present_mode = vk::PresentModeKHR::IMMEDIATE;
+    let present_mode = {
+        let present_modes = unsafe {
+            surface
+                .get_physical_device_surface_present_modes(physical_device, surface_khr)
+                .expect("Failed to get physical device surface present modes")
+        };
+        if present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            vk::PresentModeKHR::IMMEDIATE
+        } else {
+            vk::PresentModeKHR::FIFO
+        }
+    };
+    log::debug!("Swapchain present mode: {:?}", present_mode);
 
     let capabilities =
         unsafe { surface.get_physical_device_surface_capabilities(physical_device, surface_khr)? };
@@ -608,9 +630,11 @@ fn create_vulkan_swapchain(
             vk::Extent2D { width, height }
         }
     };
+    log::debug!("Swapchain extent: {:?}", extent);
 
     // Swapchain image count
     let image_count = capabilities.min_image_count;
+    log::debug!("Swapchain image count: {:?}", image_count);
 
     // Swapchain
     let families_indices = [graphics_q_index, present_q_index];
@@ -677,6 +701,7 @@ fn create_vulkan_render_pass(
     device: &Device,
     format: vk::Format,
 ) -> Result<vk::RenderPass, Box<dyn Error>> {
+    log::debug!("Creating vulkan render pass");
     let attachment_descs = [vk::AttachmentDescription::builder()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -721,6 +746,7 @@ fn create_vulkan_framebuffers(
     extent: vk::Extent2D,
     image_views: &[vk::ImageView],
 ) -> Result<Vec<vk::Framebuffer>, Box<dyn Error>> {
+    log::debug!("Creating vulkan framebuffers");
     Ok(image_views
         .iter()
         .map(|view| [*view])
@@ -741,6 +767,7 @@ fn create_vulkan_pipeline(
     render_pass: vk::RenderPass,
     extent: vk::Extent2D,
 ) -> Result<(vk::Pipeline, vk::PipelineLayout), Box<dyn Error>> {
+    log::debug!("Creating vulkan pipeline");
     let layout_info = vk::PipelineLayoutCreateInfo::builder();
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
 
@@ -853,8 +880,8 @@ fn create_vulkan_pipeline(
 
 fn read_shader_from_file<P: AsRef<Path>>(path: P) -> Result<Vec<u32>, Box<dyn Error>> {
     log::debug!("Loading shader file {:?}", path.as_ref());
-    let mut file = std::fs::File::open(path)?;
-    Ok(ash::util::read_spv(&mut file)?)
+    let mut cursor = fs::load(path);
+    Ok(ash::util::read_spv(&mut cursor)?)
 }
 
 fn create_and_record_command_buffers(
@@ -866,6 +893,7 @@ fn create_and_record_command_buffers(
     pipeline: vk::Pipeline,
     extent: vk::Extent2D,
 ) -> Result<Vec<vk::CommandBuffer>, Box<dyn Error>> {
+    log::debug!("Creating and recording command buffers");
     let buffers = {
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
@@ -915,17 +943,65 @@ fn create_and_record_command_buffers(
     Ok(buffers)
 }
 
+mod fs {
+    use std::io::Cursor;
+    use std::path::Path;
+
+    #[cfg(not(target_os = "android"))]
+    pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
+        use std::fs::File;
+        use std::io::Read;
+
+        let mut buf = Vec::new();
+        let fullpath = &Path::new("assets").join(&path);
+        let mut file = File::open(&fullpath).unwrap();
+        file.read_to_end(&mut buf).unwrap();
+        Cursor::new(buf)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
+
+        let filename = path.as_ref().to_str().expect("Can`t convert Path to &str");
+        match android_glue::load_asset(filename) {
+            Ok(buf) => Cursor::new(buf),
+            Err(_) => panic!("Can`t load asset '{}'", filename),
+        }
+    }
+}
+
 mod surface {
 
     use ash::extensions::khr::Surface;
     use ash::version::{EntryV1_0, InstanceV1_0};
     use ash::vk;
+    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+    use std::os::raw::c_char;
     use winit::Window;
+
+    #[derive(Copy, Clone, Debug)]
+    pub enum SurfaceError {
+        SurfaceCreationError(vk::Result),
+        WindowNotSupportedError,
+    }
+
+    impl std::error::Error for SurfaceError {}
+
+    impl std::fmt::Display for SurfaceError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                SurfaceError::SurfaceCreationError(result) => {
+                    write!(f, "SurfaceCreationError: {}", result)
+                }
+                SurfaceError::WindowNotSupportedError => write!(f, "WindowNotSupportedError"),
+            }
+        }
+    }
 
     /// Get required instance extensions.
     /// This is windows specific.
-    #[cfg(all(windows))]
-    pub fn required_extension_names() -> Vec<*const i8> {
+    #[cfg(target_os = "windows")]
+    pub fn required_extension_names() -> Vec<*const c_char> {
         use ash::extensions::khr::Win32Surface;
         vec![Surface::name().as_ptr(), Win32Surface::name().as_ptr()]
     }
@@ -933,7 +1009,7 @@ mod surface {
     /// Get required instance extensions.
     /// This is linux specific.
     #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-    pub fn required_extension_names() -> Vec<*const i8> {
+    pub fn required_extension_names() -> Vec<*const c_char> {
         use ash::extensions::khr::XlibSurface;
         vec![Surface::name().as_ptr(), XlibSurface::name().as_ptr()]
     }
@@ -941,35 +1017,42 @@ mod surface {
     /// Get required instance extensions.
     /// This is macos specific.
     #[cfg(target_os = "macos")]
-    pub fn required_extension_names() -> Vec<*const i8> {
+    pub fn required_extension_names() -> Vec<*const c_char> {
         use ash::extensions::mvk::MacOSSurface;
         vec![Surface::name().as_ptr(), MacOSSurface::name().as_ptr()]
     }
 
+    /// Get required instance extensions.
+    /// This is android specific.
+    #[cfg(target_os = "android")]
+    pub fn required_extension_names() -> Vec<*const c_char> {
+        use ash::extensions::khr::AndroidSurface;
+        vec![Surface::name().as_ptr(), AndroidSurface::name().as_ptr()]
+    }
+
     /// Create the surface.
     /// This is windows specific.
-    #[cfg(all(windows))]
+    #[cfg(target_os = "windows")]
     pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
         entry: &E,
         instance: &I,
         window: &Window,
-    ) -> Result<vk::SurfaceKHR, vk::Result> {
+    ) -> Result<vk::SurfaceKHR, SurfaceError> {
         use ash::extensions::khr::Win32Surface;
-        use std::{os::raw::c_void, ptr};
-        use winapi::{shared::windef::HWND, um::libloaderapi::GetModuleHandleW};
-        use winit::os::windows::WindowExt;
 
-        let hwnd = window.get_hwnd() as HWND;
-        let hinstance = GetModuleHandleW(ptr::null()) as *const c_void;
-        let win32_create_info = vk::Win32SurfaceCreateInfoKHR {
-            s_type: vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            hinstance,
-            hwnd: hwnd as *const c_void,
-        };
-        let win32_surface_loader = Win32Surface::new(entry, instance);
-        win32_surface_loader.create_win32_surface(&win32_create_info, None)
+        log::debug!("Creating windows surface");
+        match window.raw_window_handle() {
+            RawWindowHandle::Windows(handle) => {
+                let create_info = vk::Win32SurfaceCreateInfoKHR::builder()
+                    .hinstance(handle.hinstance)
+                    .hwnd(handle.hwnd);
+                let surface_loader = Win32Surface::new(entry, instance);
+                surface_loader
+                    .create_win32_surface(&create_info, None)
+                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
+            }
+            _ => Err(SurfaceError::WindowNotSupportedError),
+        }
     }
 
     /// Create the surface.
@@ -979,20 +1062,23 @@ mod surface {
         entry: &E,
         instance: &I,
         window: &Window,
-    ) -> Result<vk::SurfaceKHR, vk::Result> {
+    ) -> Result<vk::SurfaceKHR, SurfaceError> {
         use ash::extensions::khr::XlibSurface;
-        use winit::os::unix::WindowExt;
+        use std::ffi::c_void;
 
-        let x11_display = window
-            .get_xlib_display()
-            .expect("Failed to get xlib display");
-        let x11_window = window.get_xlib_window().expect("Failed to get xlib window");
-        let x11_create_info = vk::XlibSurfaceCreateInfoKHR::builder()
-            .window(x11_window)
-            .dpy(x11_display as *mut vk::Display);
-
-        let xlib_surface_loader = XlibSurface::new(entry, instance);
-        xlib_surface_loader.create_xlib_surface(&x11_create_info, None)
+        log::debug!("Creating linux surface");
+        match window.raw_window_handle() {
+            RawWindowHandle::Xlib(handle) => {
+                let create_info = vk::XlibSurfaceCreateInfoKHR::builder()
+                    .window(handle.window)
+                    .dpy(handle.display as *mut *const c_void);
+                let surface_loader = XlibSurface::new(entry, instance);
+                surface_loader
+                    .create_xlib_surface(&create_info, None)
+                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
+            }
+            _ => Err(SurfaceError::WindowNotSupportedError),
+        }
     }
 
     /// Create the surface.
@@ -1002,39 +1088,44 @@ mod surface {
         entry: &E,
         instance: &I,
         window: &Window,
-    ) -> Result<vk::SurfaceKHR, vk::Result> {
+    ) -> Result<vk::SurfaceKHR, SurfaceError> {
         use ash::extensions::mvk::MacOSSurface;
-        use cocoa::{
-            appkit::{NSView, NSWindow},
-            base::id as cocoa_id,
-        };
-        use metal_rs::CoreAnimationLayer;
-        use objc::runtime::YES;
-        use std::{mem, os::raw::c_void, ptr};
-        use winit::os::macos::WindowExt;
 
-        let wnd: cocoa_id = mem::transmute(window.get_nswindow());
+        log::debug!("Creating macos surface");
+        match window.raw_window_handle() {
+            RawWindowHandle::MacOS(handle) => {
+                let create_info = vk::MacOSSurfaceCreateInfoMVK::builder().view(&*(handle.ns_view));
+                let surface_loader = MacOSSurface::new(entry, instance);
+                surface_loader
+                    .create_mac_os_surface_mvk(&create_info, None)
+                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
+            }
+            _ => Err(SurfaceError::WindowNotSupportedError),
+        }
+    }
 
-        let layer = CoreAnimationLayer::new();
+    /// Create the surface.
+    /// This is android specific.
+    #[cfg(target_os = "android")]
+    pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
+        entry: &E,
+        instance: &I,
+        window: &Window,
+    ) -> Result<vk::SurfaceKHR, SurfaceError> {
+        use ash::extensions::khr::AndroidSurface;
 
-        layer.set_edge_antialiasing_mask(0);
-        layer.set_presents_with_transaction(false);
-        layer.remove_all_animations();
+        log::debug!("Creating android surface");
+        match window.raw_window_handle() {
+            RawWindowHandle::Android(handle) => {
+                let create_info =
+                    vk::AndroidSurfaceCreateInfoKHR::builder().window(handle.a_native_window);
 
-        let view = wnd.contentView();
-
-        layer.set_contents_scale(view.backingScaleFactor());
-        view.setLayer(mem::transmute(layer.as_ref()));
-        view.setWantsLayer(YES);
-
-        let create_info = vk::MacOSSurfaceCreateInfoMVK {
-            s_type: vk::StructureType::MACOS_SURFACE_CREATE_INFO_M,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            p_view: window.get_nsview() as *const c_void,
-        };
-
-        let macos_surface_loader = MacOSSurface::new(entry, instance);
-        macos_surface_loader.create_mac_os_surface_mvk(&create_info, None)
+                let surface_loader = AndroidSurface::new(entry, instance);
+                surface_loader
+                    .create_android_surface(&create_info, None)
+                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
+            }
+            _ => Err(SurfaceError::WindowNotSupportedError),
+        }
     }
 }
