@@ -1,6 +1,6 @@
 [package]
 name = "vk-triangle-rs"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Adrien Bennadji <adrien.bennadji@live.fr>"]
 edition = "2018"
 
@@ -26,6 +26,6 @@ assets = "assets"
 "android:hardwareAccelerated" = "true"
 
 [[package.metadata.android.feature]]
-name = "android.hardware.vulkan.level"
-version = "1"
+name = "android.hardware.vulkan.version"
+version = "0x400000"
 required = true
