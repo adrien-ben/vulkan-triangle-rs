@@ -1,5 +1,7 @@
 # Vulkan triangle with Rust
 
+![](https://github.com/adrien-ben/vulkan-triangle-rs/workflows/Cross-platform%20build/badge.svg)
+
 Rendering a simple triangle with Rust and Vulkan.
 
 We use Ash for Vulkan binding. The code is all contained in one file and with no abstraction.

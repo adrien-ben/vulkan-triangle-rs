@@ -1,0 +1,36 @@
+name: Cross-platform build
+
+on: [push]
+
+jobs:
+  # Build the project on linux, windows and macos
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    steps:
+      - uses: actions/checkout@v1
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            override: true
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+  # Build the Android apk using the cargo-apk Docker image
+  apk:
+    name: Android apk build
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@v1
+      - name: Build apk
+        run: docker run --rm -v $(pwd):/root/src philipalldredge/cargo-apk cargo apk build
+      - name: Upload apk
+        uses: actions/upload-artifact@master
+        with:
+          name: vk-triangle-rs-apk
+          path: target/android-artifacts/debug/apk/vk-triangle-rs.apk
