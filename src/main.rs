@@ -51,6 +51,7 @@ struct Triangle {
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphore: vk::Semaphore,
     render_finished_semaphore: vk::Semaphore,
+    fence: vk::Fence,
 }
 
 impl Triangle {
@@ -145,6 +146,10 @@ impl Triangle {
             let semaphore_info = vk::SemaphoreCreateInfo::builder();
             unsafe { device.create_semaphore(&semaphore_info, None)? }
         };
+        let fence = {
+            let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+            unsafe { device.create_fence(&fence_info, None)? }
+        };
 
         Ok(Self {
             window,
@@ -173,6 +178,7 @@ impl Triangle {
             command_buffers,
             image_available_semaphore,
             render_finished_semaphore,
+            fence,
         })
     }
 
@@ -283,8 +289,8 @@ impl Triangle {
                 }
             });
 
-            // Waiting for gpu to finish. This is not good practice but we just want to keep things simple.
-            unsafe { self.device.device_wait_idle()? };
+            let fence = self.fence;
+            unsafe { self.device.wait_for_fences(&[fence], true, std::u64::MAX)? };
 
             if should_stop {
                 break;
@@ -308,6 +314,8 @@ impl Triangle {
                 Err(error) => panic!("Error while acquiring next image. Cause: {}", error),
             };
 
+            unsafe { self.device.reset_fences(&[fence])? };
+
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
             let wait_semaphores = [self.image_available_semaphore];
             let signal_semaphores = [self.render_finished_semaphore];
@@ -321,7 +329,7 @@ impl Triangle {
                 .build()];
             unsafe {
                 self.device
-                    .queue_submit(self.graphics_queue, &submit_info, vk::Fence::null())?
+                    .queue_submit(self.graphics_queue, &submit_info, fence)?
             };
 
             let swapchains = [self.swapchain_khr];
@@ -347,6 +355,9 @@ impl Triangle {
             }
         }
 
+        // Wait for gpu to finish work
+        unsafe { self.device.device_wait_idle()? };
+
         log::info!("Stopping application");
         Ok(())
     }
@@ -355,6 +366,7 @@ impl Triangle {
 impl Drop for Triangle {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_fence(self.fence, None);
             self.device
                 .destroy_semaphore(self.image_available_semaphore, None);
             self.device
@@ -961,7 +973,6 @@ mod fs {
 
     #[cfg(target_os = "android")]
     pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
-
         let filename = path.as_ref().to_str().expect("Can`t convert Path to &str");
         match android_glue::load_asset(filename) {
             Ok(buf) => Cursor::new(buf),
