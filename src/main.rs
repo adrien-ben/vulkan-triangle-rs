@@ -10,7 +10,6 @@ use std::{
     error::Error,
     ffi::{CStr, CString},
     os::raw::{c_char, c_void},
-    path::Path,
 };
 use winit::{
     dpi::PhysicalSize,
@@ -798,11 +797,13 @@ fn create_vulkan_pipeline(
 
     let entry_point_name = CString::new("main")?;
 
-    let vertex_source = read_shader_from_file("shaders/shader.vert.spv")?;
+    let vertex_source =
+        read_shader_from_bytes(&include_bytes!("../assets/shaders/shader.vert.spv")[..])?;
     let vertex_create_info = vk::ShaderModuleCreateInfo::builder().code(&vertex_source);
     let vertex_module = unsafe { device.create_shader_module(&vertex_create_info, None)? };
 
-    let fragment_source = read_shader_from_file("shaders/shader.frag.spv")?;
+    let fragment_source =
+        read_shader_from_bytes(&include_bytes!("../assets/shaders/shader.frag.spv")[..])?;
     let fragment_create_info = vk::ShaderModuleCreateInfo::builder().code(&fragment_source);
     let fragment_module = unsafe { device.create_shader_module(&fragment_create_info, None)? };
 
@@ -903,9 +904,8 @@ fn create_vulkan_pipeline(
     Ok((pipeline, pipeline_layout))
 }
 
-fn read_shader_from_file<P: AsRef<Path>>(path: P) -> Result<Vec<u32>, Box<dyn Error>> {
-    log::debug!("Loading shader file {:?}", path.as_ref());
-    let mut cursor = fs::load(path);
+fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>, Box<dyn Error>> {
+    let mut cursor = std::io::Cursor::new(bytes);
     Ok(ash::util::read_spv(&mut cursor)?)
 }
 
@@ -966,22 +966,6 @@ fn create_and_record_command_buffers(
     }
 
     Ok(buffers)
-}
-
-mod fs {
-    use std::io::Cursor;
-    use std::path::Path;
-
-    pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
-        use std::fs::File;
-        use std::io::Read;
-
-        let mut buf = Vec::new();
-        let fullpath = &Path::new("assets").join(&path);
-        let mut file = File::open(&fullpath).unwrap();
-        file.read_to_end(&mut buf).unwrap();
-        Cursor::new(buf)
-    }
 }
 
 mod surface {
