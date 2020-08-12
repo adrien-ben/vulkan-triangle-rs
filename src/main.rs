@@ -28,9 +28,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (window, event_loop) = create_window();
     let mut app = Triangle::new(window)?;
+    let mut is_swapchain_dirty = false;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
+
+        if is_swapchain_dirty {
+            let dim = app.window.inner_size();
+            if dim.width > 0 && dim.height > 0 {
+                app.recreate_swapchain().expect("Failed to recreate swap");
+                is_swapchain_dirty = false;
+            } else {
+                return;
+            }
+        }
 
         match event {
             Event::WindowEvent {
@@ -40,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::LoopDestroyed => app
                 .wait_for_gpu()
                 .expect("Failed to wait for gpu to finish work"),
-            Event::MainEventsCleared => app.draw().expect("Failed to tick"),
+            Event::MainEventsCleared => is_swapchain_dirty = app.draw().expect("Failed to tick"),
             _ => (),
         }
     });
@@ -202,13 +213,6 @@ impl Triangle {
 
     fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {
         log::debug!("Recreating the swapchain");
-        // Wait for the window to be maximized before recreating the swapchain
-        loop {
-            let PhysicalSize { width, height } = self.window.inner_size();
-            if width > 0 && height > 0 {
-                break;
-            }
-        }
 
         self.wait_for_gpu()?;
 
@@ -290,9 +294,9 @@ impl Triangle {
         self.swapchain.destroy_swapchain(self.swapchain_khr, None);
     }
 
-    fn draw(&mut self) -> Result<(), Box<dyn Error>> {
-        // Waiting for gpu to finish. This is not good practice but we just want to keep things simple.
-        self.wait_for_gpu()?;
+    fn draw(&mut self) -> Result<bool, Box<dyn Error>> {
+        let fence = self.fence;
+        unsafe { self.device.wait_for_fences(&[fence], true, std::u64::MAX)? };
 
         // Drawing the frame
         let next_image_result = unsafe {
@@ -306,11 +310,12 @@ impl Triangle {
         let image_index = match next_image_result {
             Ok((image_index, _)) => image_index,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate_swapchain()?;
-                return Ok(());
+                return Ok(true);
             }
             Err(error) => panic!("Error while acquiring next image. Cause: {}", error),
         };
+
+        unsafe { self.device.reset_fences(&[fence])? };
 
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let wait_semaphores = [self.image_available_semaphore];
@@ -325,7 +330,7 @@ impl Triangle {
             .build()];
         unsafe {
             self.device
-                .queue_submit(self.graphics_queue, &submit_info, vk::Fence::null())?
+                .queue_submit(self.graphics_queue, &submit_info, fence)?
         };
 
         let swapchains = [self.swapchain_khr];
@@ -341,15 +346,15 @@ impl Triangle {
         };
         match present_result {
             Ok(is_suboptimal) if is_suboptimal => {
-                self.recreate_swapchain()?;
+                return Ok(true);
             }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate_swapchain()?;
+                return Ok(true);
             }
             Err(error) => panic!("Failed to present queue. Cause: {}", error),
             _ => {}
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn wait_for_gpu(&self) -> Result<(), Box<dyn Error>> {
@@ -399,10 +404,10 @@ fn create_vulkan_instance(
     let engine_name = CString::new("No Engine")?;
     let app_info = vk::ApplicationInfo::builder()
         .application_name(app_name.as_c_str())
-        .application_version(ash::vk_make_version!(0, 1, 0))
+        .application_version(vk::make_version(0, 1, 0))
         .engine_name(engine_name.as_c_str())
-        .engine_version(ash::vk_make_version!(0, 1, 0))
-        .api_version(ash::vk_make_version!(1, 0, 0));
+        .engine_version(vk::make_version(0, 1, 0))
+        .api_version(vk::make_version(1, 0, 0));
 
     let mut extension_names = surface::required_extension_names();
     extension_names.push(DebugReport::name().as_ptr());
@@ -477,7 +482,9 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
                 }
 
                 let present_support = unsafe {
-                    surface.get_physical_device_surface_support(device, index, surface_khr)
+                    surface
+                        .get_physical_device_surface_support(device, index, surface_khr)
+                        .expect("Failed to get device surface support")
                 };
                 if present_support && present.is_none() {
                     present = Some(index);
@@ -954,7 +961,6 @@ mod fs {
     use std::io::Cursor;
     use std::path::Path;
 
-    #[cfg(not(target_os = "android"))]
     pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
         use std::fs::File;
         use std::io::Read;
@@ -964,15 +970,6 @@ mod fs {
         let mut file = File::open(&fullpath).unwrap();
         file.read_to_end(&mut buf).unwrap();
         Cursor::new(buf)
-    }
-
-    #[cfg(target_os = "android")]
-    pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
-        let filename = path.as_ref().to_str().expect("Can`t convert Path to &str");
-        match android_glue::load_asset(filename) {
-            Ok(buf) => Cursor::new(buf),
-            Err(_) => panic!("Can`t load asset '{}'", filename),
-        }
     }
 }
 
