@@ -44,14 +44,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         match event {
+            // On resize
+            Event::WindowEvent {
+                event: WindowEvent::Resized(..),
+                ..
+            } => {
+                log::debug!("Window has been resized");
+                is_swapchain_dirty = true;
+            }
+            // Draw
+            Event::MainEventsCleared => is_swapchain_dirty = app.draw().expect("Failed to tick"),
+            // Exit app on request to close window
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
+            // Wait for gpu to finish pending work before closing app
             Event::LoopDestroyed => app
                 .wait_for_gpu()
                 .expect("Failed to wait for gpu to finish work"),
-            Event::MainEventsCleared => is_swapchain_dirty = app.draw().expect("Failed to tick"),
             _ => (),
         }
     });
@@ -388,7 +399,7 @@ fn create_window() -> (Window, EventLoop<()>) {
     let window = WindowBuilder::new()
         .with_title(APP_NAME)
         .with_inner_size(PhysicalSize::new(WIDTH, HEIGHT))
-        .with_resizable(false)
+        .with_resizable(true)
         .build(&events_loop)
         .unwrap();
 
