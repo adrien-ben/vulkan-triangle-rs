@@ -26,14 +26,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     simple_logger::init()?;
 
     let (window, event_loop) = create_window();
-    let mut app = Triangle::new(window)?;
+    let mut app = Triangle::new(&window)?;
     let mut is_swapchain_dirty = false;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
         if is_swapchain_dirty {
-            let dim = app.window.inner_size();
+            let dim = window.inner_size();
             if dim.width > 0 && dim.height > 0 {
                 app.recreate_swapchain().expect("Failed to recreate swap");
                 is_swapchain_dirty = false;
@@ -68,7 +68,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 struct Triangle {
-    window: Window,
     _entry: Entry,
     instance: Instance,
     debug_report: DebugReport,
@@ -97,16 +96,17 @@ struct Triangle {
 }
 
 impl Triangle {
-    fn new(window: Window) -> Result<Self, Box<dyn Error>> {
+    fn new(window: &Window) -> Result<Self, Box<dyn Error>> {
         log::info!("Create application");
 
         // Vulkan instance
         let entry = Entry::new()?;
-        let (instance, debug_report, debug_report_callback) = create_vulkan_instance(&entry)?;
+        let (instance, debug_report, debug_report_callback) =
+            create_vulkan_instance(&entry, window)?;
 
         // Vulkan surface
         let surface = Surface::new(&entry, &instance);
-        let surface_khr = unsafe { surface::create_surface(&entry, &instance, &window)? };
+        let surface_khr = unsafe { ash_window::create_surface(&entry, &instance, window, None)? };
 
         // Vulkan physical device and queue families indices (graphics and present)
         let (physical_device, graphics_q_index, present_q_index) =
@@ -192,7 +192,6 @@ impl Triangle {
         };
 
         Ok(Self {
-            window,
             _entry: entry,
             instance,
             debug_report,
@@ -407,6 +406,7 @@ fn create_window() -> (Window, EventLoop<()>) {
 
 fn create_vulkan_instance(
     entry: &Entry,
+    window: &Window,
 ) -> Result<(Instance, DebugReport, vk::DebugReportCallbackEXT), Box<dyn Error>> {
     log::debug!("Creating vulkan instance");
     // Vulkan instance
@@ -419,7 +419,11 @@ fn create_vulkan_instance(
         .engine_version(vk::make_version(0, 1, 0))
         .api_version(vk::make_version(1, 0, 0));
 
-    let mut extension_names = surface::required_extension_names();
+    let extension_names = ash_window::enumerate_required_extensions(window)?;
+    let mut extension_names = extension_names
+        .iter()
+        .map(|ext| ext.as_ptr())
+        .collect::<Vec<_>>();
     extension_names.push(DebugReport::name().as_ptr());
 
     let instance_create_info = vk::InstanceCreateInfo::builder()
@@ -966,164 +970,4 @@ fn create_and_record_command_buffers(
     }
 
     Ok(buffers)
-}
-
-mod surface {
-
-    use ash::extensions::khr::Surface;
-    use ash::version::{EntryV1_0, InstanceV1_0};
-    use ash::vk;
-    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-    use std::os::raw::c_char;
-    use winit::window::Window;
-
-    #[derive(Copy, Clone, Debug)]
-    pub enum SurfaceError {
-        SurfaceCreationError(vk::Result),
-        WindowNotSupportedError,
-    }
-
-    impl std::error::Error for SurfaceError {}
-
-    impl std::fmt::Display for SurfaceError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                SurfaceError::SurfaceCreationError(result) => {
-                    write!(f, "SurfaceCreationError: {}", result)
-                }
-                SurfaceError::WindowNotSupportedError => write!(f, "WindowNotSupportedError"),
-            }
-        }
-    }
-
-    /// Get required instance extensions.
-    /// This is windows specific.
-    #[cfg(target_os = "windows")]
-    pub fn required_extension_names() -> Vec<*const c_char> {
-        use ash::extensions::khr::Win32Surface;
-        vec![Surface::name().as_ptr(), Win32Surface::name().as_ptr()]
-    }
-
-    /// Get required instance extensions.
-    /// This is linux specific.
-    #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-    pub fn required_extension_names() -> Vec<*const c_char> {
-        use ash::extensions::khr::XlibSurface;
-        vec![Surface::name().as_ptr(), XlibSurface::name().as_ptr()]
-    }
-
-    /// Get required instance extensions.
-    /// This is macos specific.
-    #[cfg(target_os = "macos")]
-    pub fn required_extension_names() -> Vec<*const c_char> {
-        use ash::extensions::mvk::MacOSSurface;
-        vec![Surface::name().as_ptr(), MacOSSurface::name().as_ptr()]
-    }
-
-    /// Get required instance extensions.
-    /// This is android specific.
-    #[cfg(target_os = "android")]
-    pub fn required_extension_names() -> Vec<*const c_char> {
-        use ash::extensions::khr::AndroidSurface;
-        vec![Surface::name().as_ptr(), AndroidSurface::name().as_ptr()]
-    }
-
-    /// Create the surface.
-    /// This is windows specific.
-    #[cfg(target_os = "windows")]
-    pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
-        entry: &E,
-        instance: &I,
-        window: &Window,
-    ) -> Result<vk::SurfaceKHR, SurfaceError> {
-        use ash::extensions::khr::Win32Surface;
-
-        log::debug!("Creating windows surface");
-        match window.raw_window_handle() {
-            RawWindowHandle::Windows(handle) => {
-                let create_info = vk::Win32SurfaceCreateInfoKHR::builder()
-                    .hinstance(handle.hinstance)
-                    .hwnd(handle.hwnd);
-                let surface_loader = Win32Surface::new(entry, instance);
-                surface_loader
-                    .create_win32_surface(&create_info, None)
-                    .map_err(SurfaceError::SurfaceCreationError)
-            }
-            _ => Err(SurfaceError::WindowNotSupportedError),
-        }
-    }
-
-    /// Create the surface.
-    /// This is linux specific.
-    #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-    pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
-        entry: &E,
-        instance: &I,
-        window: &Window,
-    ) -> Result<vk::SurfaceKHR, SurfaceError> {
-        use ash::extensions::khr::XlibSurface;
-        use std::ffi::c_void;
-
-        log::debug!("Creating linux surface");
-        match window.raw_window_handle() {
-            RawWindowHandle::Xlib(handle) => {
-                let create_info = vk::XlibSurfaceCreateInfoKHR::builder()
-                    .window(handle.window)
-                    .dpy(handle.display as *mut *const c_void);
-                let surface_loader = XlibSurface::new(entry, instance);
-                surface_loader
-                    .create_xlib_surface(&create_info, None)
-                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
-            }
-            _ => Err(SurfaceError::WindowNotSupportedError),
-        }
-    }
-
-    /// Create the surface.
-    /// This is macos specific.
-    #[cfg(target_os = "macos")]
-    pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
-        entry: &E,
-        instance: &I,
-        window: &Window,
-    ) -> Result<vk::SurfaceKHR, SurfaceError> {
-        use ash::extensions::mvk::MacOSSurface;
-
-        log::debug!("Creating macos surface");
-        match window.raw_window_handle() {
-            RawWindowHandle::MacOS(handle) => {
-                let create_info = vk::MacOSSurfaceCreateInfoMVK::builder().view(&*(handle.ns_view));
-                let surface_loader = MacOSSurface::new(entry, instance);
-                surface_loader
-                    .create_mac_os_surface_mvk(&create_info, None)
-                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
-            }
-            _ => Err(SurfaceError::WindowNotSupportedError),
-        }
-    }
-
-    /// Create the surface.
-    /// This is android specific.
-    #[cfg(target_os = "android")]
-    pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
-        entry: &E,
-        instance: &I,
-        window: &Window,
-    ) -> Result<vk::SurfaceKHR, SurfaceError> {
-        use ash::extensions::khr::AndroidSurface;
-
-        log::debug!("Creating android surface");
-        match window.raw_window_handle() {
-            RawWindowHandle::Android(handle) => {
-                let create_info =
-                    vk::AndroidSurfaceCreateInfoKHR::builder().window(handle.a_native_window);
-
-                let surface_loader = AndroidSurface::new(entry, instance);
-                surface_loader
-                    .create_android_surface(&create_info, None)
-                    .map_err(|e| SurfaceError::SurfaceCreationError(e))
-            }
-            _ => Err(SurfaceError::WindowNotSupportedError),
-        }
-    }
 }
