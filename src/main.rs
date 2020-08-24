@@ -454,16 +454,14 @@ unsafe extern "system" fn vulkan_debug_callback(
     p_message: *const c_char,
     _: *mut c_void,
 ) -> u32 {
-    if flag == vk::DebugReportFlagsEXT::DEBUG {
-        log::debug!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
-    } else if flag == vk::DebugReportFlagsEXT::INFORMATION {
-        log::info!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
-    } else if flag == vk::DebugReportFlagsEXT::WARNING {
-        log::warn!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
-    } else if flag == vk::DebugReportFlagsEXT::PERFORMANCE_WARNING {
-        log::warn!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
-    } else {
-        log::error!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
+    use vk::DebugReportFlagsEXT as Flag;
+
+    let message = CStr::from_ptr(p_message);
+    match flag {
+        Flag::DEBUG => log::debug!("{:?} - {:?}", typ, message),
+        Flag::INFORMATION => log::info!("{:?} - {:?}", typ, message),
+        Flag::WARNING | Flag::PERFORMANCE_WARNING => log::warn!("{:?} - {:?}", typ, message),
+        _ => log::error!("{:?} - {:?}", typ, message),
     }
     vk::FALSE
 }
