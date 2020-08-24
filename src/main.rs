@@ -23,7 +23,7 @@ const HEIGHT: u32 = 600;
 const APP_NAME: &str = "Triangle";
 
 fn main() -> Result<(), Box<dyn Error>> {
-    simple_logger::init()?;
+    simple_logger::init_by_env();
 
     let (window, event_loop) = create_window();
     let mut app = Triangle::new(&window)?;
@@ -31,16 +31,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
-
-        if is_swapchain_dirty {
-            let dim = window.inner_size();
-            if dim.width > 0 && dim.height > 0 {
-                app.recreate_swapchain().expect("Failed to recreate swap");
-                is_swapchain_dirty = false;
-            } else {
-                return;
-            }
-        }
 
         match event {
             // On resize
@@ -52,7 +42,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 is_swapchain_dirty = true;
             }
             // Draw
-            Event::MainEventsCleared => is_swapchain_dirty = app.draw().expect("Failed to tick"),
+            Event::MainEventsCleared => {
+                if is_swapchain_dirty {
+                    let dim = window.inner_size();
+                    if dim.width > 0 && dim.height > 0 {
+                        app.recreate_swapchain().expect("Failed to recreate swap");
+                    } else {
+                        return;
+                    }
+                }
+
+                is_swapchain_dirty = app.draw().expect("Failed to tick");
+            }
             // Exit app on request to close window
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
