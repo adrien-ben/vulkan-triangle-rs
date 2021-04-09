@@ -19,3 +19,19 @@ export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
 # Compile and start the application using cargo
 RUST_LOG=info cargo run
 ```
+
+## Run it on Android
+
+We use [android-ndk-rs][ndk-rs] to run the application on Android devices.
+
+```sh
+export JAVA_HOME=C:\\"Program Files"\\OpenJDK\\jdk-12.0.1
+
+# Run the apk on a connected device/emulator
+cargo apk run
+
+# See log output
+adb logcat RustStdoutStderr:D *:S
+```
+
+[ndk-rs]: https://github.com/rust-windowing/android-ndk-rs
