@@ -1,15 +1,16 @@
 use ash::{
     extensions::{
-        ext::DebugReport,
+        ext::DebugUtils,
         khr::{Surface, Swapchain},
     },
     version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk, Device, Entry, Instance,
 };
+use simple_logger::SimpleLogger;
 use std::{
     error::Error,
     ffi::{CStr, CString},
-    os::raw::{c_char, c_void},
+    os::raw::c_void,
 };
 use winit::{
     dpi::PhysicalSize,
@@ -25,9 +26,14 @@ const APP_NAME: &str = "Triangle";
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace = "on"))]
 pub fn main() {
     #[cfg(not(target_os = "android"))]
-    simple_logger::init_by_env();
+    SimpleLogger::from_env()
+        .init()
+        .expect("Failed to init logger");
     #[cfg(target_os = "android")]
-    simple_logger::init_with_level(log::Level::Debug).expect("Failed to init logger");
+    SimpleLogger::from_env()
+        .with_level(log::LevelFilter::Debug)
+        .init()
+        .expect("Failed to init logger");
 
     log::debug!("Starting application");
 
@@ -106,8 +112,8 @@ pub fn main() {
 struct Triangle {
     _entry: Entry,
     instance: Instance,
-    debug_report: DebugReport,
-    debug_report_callback: vk::DebugReportCallbackEXT,
+    debug_utils: DebugUtils,
+    debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     surface: Surface,
     surface_khr: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
@@ -136,8 +142,8 @@ impl Triangle {
         log::info!("Create application");
 
         // Vulkan instance
-        let entry = Entry::new()?;
-        let (instance, debug_report, debug_report_callback) =
+        let entry = unsafe { Entry::new()? };
+        let (instance, debug_utils, debug_utils_messenger) =
             create_vulkan_instance(&entry, window)?;
 
         // Vulkan surface
@@ -230,8 +236,8 @@ impl Triangle {
         Ok(Self {
             _entry: entry,
             instance,
-            debug_report,
-            debug_report_callback,
+            debug_utils,
+            debug_utils_messenger,
             surface,
             surface_khr,
             physical_device,
@@ -420,8 +426,8 @@ impl Drop for Triangle {
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.surface.destroy_surface(self.surface_khr, None);
-            self.debug_report
-                .destroy_debug_report_callback(self.debug_report_callback, None);
+            self.debug_utils
+                .destroy_debug_utils_messenger(self.debug_utils_messenger, None);
             self.instance.destroy_instance(None);
         }
     }
@@ -443,7 +449,7 @@ fn create_window() -> (Window, EventLoop<()>) {
 fn create_vulkan_instance(
     entry: &Entry,
     window: &Window,
-) -> Result<(Instance, DebugReport, vk::DebugReportCallbackEXT), Box<dyn Error>> {
+) -> Result<(Instance, DebugUtils, vk::DebugUtilsMessengerEXT), Box<dyn Error>> {
     log::debug!("Creating vulkan instance");
     // Vulkan instance
     let app_name = CString::new(APP_NAME)?;
@@ -460,7 +466,7 @@ fn create_vulkan_instance(
         .iter()
         .map(|ext| ext.as_ptr())
         .collect::<Vec<_>>();
-    extension_names.push(DebugReport::name().as_ptr());
+    extension_names.push(DebugUtils::name().as_ptr());
 
     let instance_create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)
@@ -469,33 +475,31 @@ fn create_vulkan_instance(
     let instance = unsafe { entry.create_instance(&instance_create_info, None)? };
 
     // Vulkan debug report
-    let create_info = vk::DebugReportCallbackCreateInfoEXT::builder()
-        .flags(vk::DebugReportFlagsEXT::all())
-        .pfn_callback(Some(vulkan_debug_callback));
-    let debug_report = DebugReport::new(entry, &instance);
-    let debug_report_callback =
-        unsafe { debug_report.create_debug_report_callback(&create_info, None)? };
+    let create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+        .flags(vk::DebugUtilsMessengerCreateFlagsEXT::all())
+        .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
+        .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+        .pfn_user_callback(Some(vulkan_debug_callback));
+    let debug_utils = DebugUtils::new(entry, &instance);
+    let debug_utils_messenger =
+        unsafe { debug_utils.create_debug_utils_messenger(&create_info, None)? };
 
-    Ok((instance, debug_report, debug_report_callback))
+    Ok((instance, debug_utils, debug_utils_messenger))
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
-    flag: vk::DebugReportFlagsEXT,
-    typ: vk::DebugReportObjectTypeEXT,
-    _: u64,
-    _: usize,
-    _: i32,
-    _: *const c_char,
-    p_message: *const c_char,
+    flag: vk::DebugUtilsMessageSeverityFlagsEXT,
+    typ: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _: *mut c_void,
-) -> u32 {
-    use vk::DebugReportFlagsEXT as Flag;
+) -> vk::Bool32 {
+    use vk::DebugUtilsMessageSeverityFlagsEXT as Flag;
 
-    let message = CStr::from_ptr(p_message);
+    let message = CStr::from_ptr((*p_callback_data).p_message);
     match flag {
-        Flag::DEBUG => log::debug!("{:?} - {:?}", typ, message),
-        Flag::INFORMATION => log::info!("{:?} - {:?}", typ, message),
-        Flag::WARNING | Flag::PERFORMANCE_WARNING => log::warn!("{:?} - {:?}", typ, message),
+        Flag::VERBOSE => log::debug!("{:?} - {:?}", typ, message),
+        Flag::INFO => log::info!("{:?} - {:?}", typ, message),
+        Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
         _ => log::error!("{:?} - {:?}", typ, message),
     }
     vk::FALSE
