@@ -3,7 +3,6 @@ use ash::{
         ext::DebugUtils,
         khr::{Surface, Swapchain},
     },
-    version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk, Device, Entry, Instance,
 };
 use simple_logger::SimpleLogger;
@@ -24,7 +23,7 @@ const HEIGHT: u32 = 600;
 const APP_NAME: &str = "Triangle";
 
 fn main() -> Result<(), Box<dyn Error>> {
-    SimpleLogger::from_env().init()?;
+    SimpleLogger::default().env().init()?;
 
     let (window, event_loop) = create_window();
     let mut app = Triangle::new(&window)?;
@@ -416,10 +415,10 @@ fn create_vulkan_instance(
     let engine_name = CString::new("No Engine")?;
     let app_info = vk::ApplicationInfo::builder()
         .application_name(app_name.as_c_str())
-        .application_version(vk::make_version(0, 1, 0))
+        .application_version(vk::make_api_version(0, 0, 1, 0))
         .engine_name(engine_name.as_c_str())
-        .engine_version(vk::make_version(0, 1, 0))
-        .api_version(vk::make_version(1, 0, 0));
+        .engine_version(vk::make_api_version(0, 0, 1, 0))
+        .api_version(vk::make_api_version(0, 1, 0, 0));
 
     let extension_names = ash_window::enumerate_required_extensions(window)?;
     let mut extension_names = extension_names
