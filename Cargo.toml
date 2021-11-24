@@ -4,9 +4,24 @@ version = "0.1.1"
 authors = ["Adrien Bennadji <adrien.bennadji@live.fr>"]
 edition = "2018"
 
+[lib]
+crate-type = ["lib", "cdylib"]
+
 [dependencies]
 log = "0.4"
 simple_logger = "1.11"
 ash = "0.33"
 ash-window = "0.7"
-winit = "0.25"
+winit = { git = "https://github.com/adrien-ben/winit", branch = "android-ndk-0.5" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-glue = { version = "0.5", features = ["logger"] }
+
+# Android manifest
+[package.metadata.android]
+build_targets = [ "armv7-linux-androideabi", "aarch64-linux-android", "i686-linux-android", "x86_64-linux-android" ]
+apk_label = "Triangle"
+fullscreen = false
+
+[package.metadata.android.application.activity]
+exported = true
