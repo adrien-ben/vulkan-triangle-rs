@@ -2,11 +2,11 @@
 name = "vk-triangle-rs"
 version = "0.1.1"
 authors = ["Adrien Bennadji <adrien.bennadji@live.fr>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 log = "0.4"
-simple_logger = "1.11"
-ash = "0.33"
-ash-window = "0.7"
-winit = "0.25"
+simple_logger = "2.2.0"
+ash = "0.37"
+ash-window = "0.10"
+winit = "0.26"
