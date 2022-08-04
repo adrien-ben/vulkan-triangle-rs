@@ -488,7 +488,20 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
     surface_khr: vk::SurfaceKHR,
 ) -> Result<(vk::PhysicalDevice, u32, u32), Box<dyn Error>> {
     log::debug!("Creating vulkan physical device");
-    let devices = unsafe { instance.enumerate_physical_devices()? };
+    // Get the list of physical devices by prioritizing discrete then integrated gpu
+    let devices = {
+        let mut devices = unsafe { instance.enumerate_physical_devices()? };
+        devices.sort_by_key(|device| {
+            let props = unsafe { instance.get_physical_device_properties(*device) };
+            match props.device_type {
+                vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+                vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
+                _ => 2,
+            }
+        });
+        devices
+    };
+
     let mut graphics = None;
     let mut present = None;
     let device = devices
@@ -560,7 +573,7 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
     unsafe {
         let props = instance.get_physical_device_properties(device);
         let device_name = CStr::from_ptr(props.device_name.as_ptr());
-        log::debug!("Selected physical device: {:?}", device_name);
+        log::info!("Selected physical device: {:?}", device_name);
     }
 
     Ok((device, graphics.unwrap(), present.unwrap()))
