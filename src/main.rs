@@ -410,6 +410,19 @@ fn create_vulkan_instance(
     window: &Window,
 ) -> Result<(Instance, DebugUtils, vk::DebugUtilsMessengerEXT), Box<dyn Error>> {
     log::debug!("Creating vulkan instance");
+
+    // Supported vulkan version
+    let (major, minor) = match entry.try_enumerate_instance_version()? {
+        // Vulkan 1.1+
+        Some(version) => (
+            vk::api_version_major(version),
+            vk::api_version_minor(version),
+        ),
+        // Vulkan 1.0
+        None => (1, 0),
+    };
+    log::info!("Vulkan {major}.{minor} supported");
+
     // Vulkan instance
     let app_name = CString::new(APP_NAME)?;
     let engine_name = CString::new("No Engine")?;
@@ -418,7 +431,7 @@ fn create_vulkan_instance(
         .application_version(vk::make_api_version(0, 0, 1, 0))
         .engine_name(engine_name.as_c_str())
         .engine_version(vk::make_api_version(0, 0, 1, 0))
-        .api_version(vk::make_api_version(0, 1, 0, 0));
+        .api_version(vk::make_api_version(0, major, minor, 0));
 
     let mut extension_names = ash_window::enumerate_required_extensions(window)?.to_vec();
     extension_names.push(DebugUtils::name().as_ptr());
