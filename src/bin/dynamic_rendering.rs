@@ -294,22 +294,31 @@ impl Triangle {
 
         unsafe { self.device.reset_fences(&[fence])? };
 
-        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let wait_semaphores = [self.image_available_semaphore];
-        let signal_semaphores = [self.render_finished_semaphore];
+        let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+            .semaphore(self.image_available_semaphore)
+            .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
 
-        let command_buffers = [self.command_buffers[image_index as usize]];
-        let submit_info = [vk::SubmitInfo::builder()
-            .wait_semaphores(&wait_semaphores)
-            .wait_dst_stage_mask(&wait_stages)
-            .command_buffers(&command_buffers)
-            .signal_semaphores(&signal_semaphores)
-            .build()];
+        let signal_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+            .semaphore(self.render_finished_semaphore)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
+
+        let cmd_buffer_submit_info = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(self.command_buffers[image_index as usize]);
+
+        let submit_info = vk::SubmitInfo2::builder()
+            .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_submit_info))
+            .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_submit_info))
+            .command_buffer_infos(std::slice::from_ref(&cmd_buffer_submit_info));
+
         unsafe {
-            self.device
-                .queue_submit(self.graphics_queue, &submit_info, fence)?
+            self.device.queue_submit2(
+                self.graphics_queue,
+                std::slice::from_ref(&submit_info),
+                fence,
+            )?
         };
 
+        let signal_semaphores = [self.render_finished_semaphore];
         let swapchains = [self.swapchain_khr];
         let images_indices = [image_index];
         let present_info = vk::PresentInfoKHR::builder()
@@ -529,23 +538,18 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
                     .expect("Failed to get physical device surface present modes")
             };
 
-            // Is dynamic rendering supported
-            let dynamic_rendering_support = {
-                let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
-                let mut features =
-                    vk::PhysicalDeviceFeatures2::builder().push_next(&mut features13);
-
-                unsafe { instance.get_physical_device_features2(device, &mut features) };
-
-                features13.dynamic_rendering == vk::TRUE
-            };
+            // Check 1.3 features
+            let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+            let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features13);
+            unsafe { instance.get_physical_device_features2(device, &mut features) };
 
             graphics.is_some()
                 && present.is_some()
                 && extention_support
                 && !formats.is_empty()
                 && !present_modes.is_empty()
-                && dynamic_rendering_support
+                && features13.dynamic_rendering == vk::TRUE
+                && features13.synchronization2 == vk::TRUE
         })
         .expect("Could not find a suitable device");
 
@@ -583,7 +587,9 @@ fn create_vulkan_device_and_graphics_and_present_qs(
 
     let device_extensions_ptrs = [Swapchain::name().as_ptr()];
 
-    let mut features13 = vk::PhysicalDeviceVulkan13Features::builder().dynamic_rendering(true);
+    let mut features13 = vk::PhysicalDeviceVulkan13Features::builder()
+        .dynamic_rendering(true)
+        .synchronization2(true);
     let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features13);
 
     let device_create_info = vk::DeviceCreateInfo::builder()
@@ -891,10 +897,13 @@ fn create_and_record_command_buffers(
             .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
         unsafe { device.begin_command_buffer(buffer, &command_buffer_begin_info)? };
 
-        let image_memory_barrier = vk::ImageMemoryBarrier::builder()
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+        let image_memory_barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::NONE)
             .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
             .image(images[index])
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -903,17 +912,10 @@ fn create_and_record_command_buffers(
                 ..Default::default()
             });
 
-        unsafe {
-            device.cmd_pipeline_barrier(
-                buffer,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&image_memory_barrier),
-            )
-        };
+        let dependency_info = vk::DependencyInfo::builder()
+            .image_memory_barriers(std::slice::from_ref(&image_memory_barrier));
+
+        unsafe { device.cmd_pipeline_barrier2(buffer, &dependency_info) };
 
         let color_attachment_info = vk::RenderingAttachmentInfo::builder()
             .image_view(image_views[index])
@@ -942,9 +944,12 @@ fn create_and_record_command_buffers(
 
         unsafe { device.cmd_end_rendering(buffer) };
 
-        let image_memory_barrier = vk::ImageMemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        let image_memory_barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
             .image(images[index])
             .subresource_range(vk::ImageSubresourceRange {
@@ -954,17 +959,10 @@ fn create_and_record_command_buffers(
                 ..Default::default()
             });
 
-        unsafe {
-            device.cmd_pipeline_barrier(
-                buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&image_memory_barrier),
-            )
-        };
+        let dependency_info = vk::DependencyInfo::builder()
+            .image_memory_barriers(std::slice::from_ref(&image_memory_barrier));
+
+        unsafe { device.cmd_pipeline_barrier2(buffer, &dependency_info) };
 
         unsafe { device.end_command_buffer(buffer)? };
     }

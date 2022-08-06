@@ -2,7 +2,9 @@
 
 ![Build badge](https://github.com/adrien-ben/vulkan-triangle-rs/workflows/Cross-platform%20build/badge.svg)
 
-Rendering a simple triangle with Rust and Vulkan. There are two examples. The first using no specific Vulkan features or extentions. The other is using Vulkan 1.3's dynamic rendering feature can be found under `src/bin/dynamic_rendering.rs`.
+Rendering a simple triangle with Rust and Vulkan. There are two examples. The first using no specific Vulkan features or extentions. 
+
+The other is using Vulkan 1.3's dynamic rendering feature can be found under `src/bin/dynamic_rendering.rs`. It also makes use of `VK_KHR_synchronization2`.
 
 We use Ash for Vulkan binding. The code is all contained in one file and with no abstraction.
 
