@@ -7,7 +7,8 @@ default-run = "vk-triangle-rs"
 
 [dependencies]
 log = "0.4"
-simple_logger = "2.2.0"
+simple_logger = "4.0.0"
 ash = "0.37"
-ash-window = "0.10"
-winit = "0.26"
+ash-window = "0.12"
+raw-window-handle = "0.5"
+winit = "0.27"
