@@ -1,0 +1,11 @@
+$env:VK_LAYER_PATH="$env:VULKAN_SDK\Bin"
+$env:VK_INSTANCE_LAYERS="VK_LAYER_KHRONOS_validation"
+$env:RUST_BACKTRACE=1
+$env:RUST_LOG="info"
+
+cargo run
+
+$env:VK_LAYER_PATH=""
+$env:VK_INSTANCE_LAYERS=""
+$env:RUST_BACKTRACE=0
+$env:RUST_LOG=""
