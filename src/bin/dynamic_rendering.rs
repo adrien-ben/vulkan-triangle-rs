@@ -1,38 +1,34 @@
 use ash::{
-    extensions::{
-        ext::DebugUtils,
-        khr::{Surface, Swapchain},
-    },
+    ext::debug_utils,
+    khr::{surface, swapchain},
     vk, Device, Entry, Instance,
 };
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use simple_logger::SimpleLogger;
 use std::{
     error::Error,
     ffi::{CStr, CString},
-    os::raw::c_void,
+};
+use vk_triangle_rs::{
+    create_vulkan_instance, create_vulkan_swapchain, create_window, read_shader_from_bytes,
 };
 use winit::{
-    dpi::PhysicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
+    window::Window,
 };
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
-const APP_NAME: &str = "Triangle";
+const APP_NAME: &str = "Triangle (dynamic_rendering)";
 
 fn main() -> Result<(), Box<dyn Error>> {
     SimpleLogger::default().env().init()?;
 
-    let (window, event_loop) = create_window();
+    let (window, event_loop) = create_window(APP_NAME, WIDTH, HEIGHT)?;
     let mut app = Triangle::new(&window)?;
     let mut is_swapchain_dirty = false;
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
-
+    event_loop.run(move |event, elwt| {
         match event {
             // On resize
             Event::WindowEvent {
@@ -43,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 is_swapchain_dirty = true;
             }
             // Draw
-            Event::MainEventsCleared => {
+            Event::AboutToWait => {
                 if is_swapchain_dirty {
                     let dim = window.inner_size();
                     if dim.width > 0 && dim.height > 0 {
@@ -59,22 +55,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
-            } => *control_flow = ControlFlow::Exit,
+            } => elwt.exit(),
             // Wait for gpu to finish pending work before closing app
-            Event::LoopDestroyed => app
+            Event::LoopExiting => app
                 .wait_for_gpu()
                 .expect("Failed to wait for gpu to finish work"),
             _ => (),
         }
-    });
+    })?;
+
+    Ok(())
 }
 
 struct Triangle {
     _entry: Entry,
     instance: Instance,
-    debug_utils: DebugUtils,
+    debug_utils: debug_utils::Instance,
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
-    surface: Surface,
+    surface: surface::Instance,
     surface_khr: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
     graphics_q_index: u32,
@@ -83,7 +81,7 @@ struct Triangle {
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
     command_pool: vk::CommandPool,
-    swapchain: Swapchain,
+    swapchain: swapchain::Device,
     swapchain_khr: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
@@ -102,16 +100,16 @@ impl Triangle {
         // Vulkan instance
         let entry = unsafe { Entry::load()? };
         let (instance, debug_utils, debug_utils_messenger) =
-            create_vulkan_instance(&entry, window)?;
+            create_vulkan_instance(APP_NAME, &entry, window)?;
 
         // Vulkan surface
-        let surface = Surface::new(&entry, &instance);
+        let surface = surface::Instance::new(&entry, &instance);
         let surface_khr = unsafe {
             ash_window::create_surface(
                 &entry,
                 &instance,
-                window.raw_display_handle(),
-                window.raw_window_handle(),
+                window.display_handle()?.as_raw(),
+                window.window_handle()?.as_raw(),
                 None,
             )?
         };
@@ -135,7 +133,7 @@ impl Triangle {
 
         // Command pool
         let command_pool = {
-            let command_pool_info = vk::CommandPoolCreateInfo::builder()
+            let command_pool_info = vk::CommandPoolCreateInfo::default()
                 .queue_family_index(graphics_q_index)
                 .flags(vk::CommandPoolCreateFlags::empty());
             unsafe { device.create_command_pool(&command_pool_info, None)? }
@@ -150,6 +148,8 @@ impl Triangle {
             swapchain_images,
             swapchain_image_views,
         ) = create_vulkan_swapchain(
+            WIDTH,
+            HEIGHT,
             &instance,
             &surface,
             surface_khr,
@@ -176,15 +176,15 @@ impl Triangle {
 
         // Semaphore use for presentation
         let image_available_semaphore = {
-            let semaphore_info = vk::SemaphoreCreateInfo::builder();
+            let semaphore_info = vk::SemaphoreCreateInfo::default();
             unsafe { device.create_semaphore(&semaphore_info, None)? }
         };
         let render_finished_semaphore = {
-            let semaphore_info = vk::SemaphoreCreateInfo::builder();
+            let semaphore_info = vk::SemaphoreCreateInfo::default();
             unsafe { device.create_semaphore(&semaphore_info, None)? }
         };
         let fence = {
-            let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+            let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
             unsafe { device.create_fence(&fence_info, None)? }
         };
 
@@ -231,6 +231,8 @@ impl Triangle {
             swapchain_images,
             swapchain_image_views,
         ) = create_vulkan_swapchain(
+            WIDTH,
+            HEIGHT,
             &self.instance,
             &self.surface,
             self.surface_khr,
@@ -303,18 +305,18 @@ impl Triangle {
 
         unsafe { self.device.reset_fences(&[fence])? };
 
-        let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+        let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::default()
             .semaphore(self.image_available_semaphore)
             .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
 
-        let signal_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+        let signal_semaphore_submit_info = vk::SemaphoreSubmitInfo::default()
             .semaphore(self.render_finished_semaphore)
             .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
 
-        let cmd_buffer_submit_info = vk::CommandBufferSubmitInfo::builder()
+        let cmd_buffer_submit_info = vk::CommandBufferSubmitInfo::default()
             .command_buffer(self.command_buffers[image_index as usize]);
 
-        let submit_info = vk::SubmitInfo2::builder()
+        let submit_info = vk::SubmitInfo2::default()
             .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_submit_info))
             .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_submit_info))
             .command_buffer_infos(std::slice::from_ref(&cmd_buffer_submit_info));
@@ -330,7 +332,7 @@ impl Triangle {
         let signal_semaphores = [self.render_finished_semaphore];
         let swapchains = [self.swapchain_khr];
         let images_indices = [image_index];
-        let present_info = vk::PresentInfoKHR::builder()
+        let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&signal_semaphores)
             .swapchains(&swapchains)
             .image_indices(&images_indices);
@@ -377,100 +379,9 @@ impl Drop for Triangle {
     }
 }
 
-fn create_window() -> (Window, EventLoop<()>) {
-    log::debug!("Creating window and event loop");
-    let events_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title(APP_NAME)
-        .with_inner_size(PhysicalSize::new(WIDTH, HEIGHT))
-        .with_resizable(true)
-        .build(&events_loop)
-        .unwrap();
-
-    (window, events_loop)
-}
-
-fn create_vulkan_instance(
-    entry: &Entry,
-    window: &Window,
-) -> Result<(Instance, DebugUtils, vk::DebugUtilsMessengerEXT), Box<dyn Error>> {
-    log::debug!("Creating vulkan instance");
-
-    // Supported vulkan version
-    let (major, minor) = match entry.try_enumerate_instance_version()? {
-        // Vulkan 1.1+
-        Some(version) => (
-            vk::api_version_major(version),
-            vk::api_version_minor(version),
-        ),
-        // Vulkan 1.0
-        None => (1, 0),
-    };
-    log::info!("Vulkan {major}.{minor} supported");
-
-    // Vulkan instance
-    let app_name = CString::new(APP_NAME)?;
-    let engine_name = CString::new("No Engine")?;
-    let app_info = vk::ApplicationInfo::builder()
-        .application_name(app_name.as_c_str())
-        .application_version(vk::make_api_version(0, 0, 1, 0))
-        .engine_name(engine_name.as_c_str())
-        .engine_version(vk::make_api_version(0, 0, 1, 0))
-        .api_version(vk::make_api_version(0, major, minor, 0));
-
-    let mut extension_names =
-        ash_window::enumerate_required_extensions(window.raw_display_handle())?.to_vec();
-    extension_names.push(DebugUtils::name().as_ptr());
-
-    let instance_create_info = vk::InstanceCreateInfo::builder()
-        .application_info(&app_info)
-        .enabled_extension_names(&extension_names);
-
-    let instance = unsafe { entry.create_instance(&instance_create_info, None)? };
-
-    // Vulkan debug report
-    let create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-        .flags(vk::DebugUtilsMessengerCreateFlagsEXT::empty())
-        .message_severity(
-            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
-                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-        )
-        .message_type(
-            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
-                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
-        )
-        .pfn_user_callback(Some(vulkan_debug_callback));
-    let debug_utils = DebugUtils::new(entry, &instance);
-    let debug_utils_messenger =
-        unsafe { debug_utils.create_debug_utils_messenger(&create_info, None)? };
-
-    Ok((instance, debug_utils, debug_utils_messenger))
-}
-
-unsafe extern "system" fn vulkan_debug_callback(
-    flag: vk::DebugUtilsMessageSeverityFlagsEXT,
-    typ: vk::DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-    _: *mut c_void,
-) -> vk::Bool32 {
-    use vk::DebugUtilsMessageSeverityFlagsEXT as Flag;
-
-    let message = CStr::from_ptr((*p_callback_data).p_message);
-    match flag {
-        Flag::VERBOSE => log::debug!("{:?} - {:?}", typ, message),
-        Flag::INFO => log::info!("{:?} - {:?}", typ, message),
-        Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
-        _ => log::error!("{:?} - {:?}", typ, message),
-    }
-    vk::FALSE
-}
-
 fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
     instance: &Instance,
-    surface: &Surface,
+    surface: &surface::Instance,
     surface_khr: vk::SurfaceKHR,
 ) -> Result<(vk::PhysicalDevice, u32, u32), Box<dyn Error>> {
     log::debug!("Creating vulkan physical device");
@@ -531,7 +442,7 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
             };
             let extention_support = extension_props.iter().any(|ext| {
                 let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
-                Swapchain::name() == name
+                swapchain::NAME == name
             });
 
             // Does the device have available formats for the given surface
@@ -550,7 +461,7 @@ fn create_vulkan_physical_device_and_get_graphics_and_present_qs_indices(
 
             // Check 1.3 features
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
-            let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features13);
+            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features13);
             unsafe { instance.get_physical_device_features2(device, &mut features) };
 
             graphics.is_some()
@@ -587,22 +498,25 @@ fn create_vulkan_device_and_graphics_and_present_qs(
         indices
             .iter()
             .map(|index| {
-                vk::DeviceQueueCreateInfo::builder()
+                vk::DeviceQueueCreateInfo::default()
                     .queue_family_index(*index)
                     .queue_priorities(&queue_priorities)
-                    .build()
             })
             .collect::<Vec<_>>()
     };
 
-    let device_extensions_ptrs = [Swapchain::name().as_ptr()];
+    let device_extensions_ptrs = [
+        swapchain::NAME.as_ptr(),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        ash::khr::portability_subset::NAME,
+    ];
 
-    let mut features13 = vk::PhysicalDeviceVulkan13Features::builder()
+    let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .dynamic_rendering(true)
         .synchronization2(true);
-    let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features13);
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features13);
 
-    let device_create_info = vk::DeviceCreateInfo::builder()
+    let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create_infos)
         .enabled_extension_names(&device_extensions_ptrs)
         .push_next(&mut features);
@@ -614,181 +528,41 @@ fn create_vulkan_device_and_graphics_and_present_qs(
     Ok((device, graphics_queue, present_queue))
 }
 
-fn create_vulkan_swapchain(
-    instance: &Instance,
-    surface: &Surface,
-    surface_khr: vk::SurfaceKHR,
-    physical_device: vk::PhysicalDevice,
-    graphics_q_index: u32,
-    present_q_index: u32,
-    device: &Device,
-) -> Result<
-    (
-        Swapchain,
-        vk::SwapchainKHR,
-        vk::Extent2D,
-        vk::Format,
-        Vec<vk::Image>,
-        Vec<vk::ImageView>,
-    ),
-    Box<dyn Error>,
-> {
-    log::debug!("Creating vulkan swapchain");
-    // Swapchain format
-    let format = {
-        let formats =
-            unsafe { surface.get_physical_device_surface_formats(physical_device, surface_khr)? };
-        if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
-            vk::SurfaceFormatKHR {
-                format: vk::Format::B8G8R8A8_UNORM,
-                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-            }
-        } else {
-            *formats
-                .iter()
-                .find(|format| {
-                    format.format == vk::Format::B8G8R8A8_UNORM
-                        && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-                })
-                .unwrap_or(&formats[0])
-        }
-    };
-    log::debug!("Swapchain format: {:?}", format);
-
-    // Swapchain present mode
-    let present_mode = {
-        let present_modes = unsafe {
-            surface
-                .get_physical_device_surface_present_modes(physical_device, surface_khr)
-                .expect("Failed to get physical device surface present modes")
-        };
-        if present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
-            vk::PresentModeKHR::IMMEDIATE
-        } else {
-            vk::PresentModeKHR::FIFO
-        }
-    };
-    log::debug!("Swapchain present mode: {:?}", present_mode);
-
-    let capabilities =
-        unsafe { surface.get_physical_device_surface_capabilities(physical_device, surface_khr)? };
-
-    // Swapchain extent
-    let extent = {
-        if capabilities.current_extent.width != std::u32::MAX {
-            capabilities.current_extent
-        } else {
-            let min = capabilities.min_image_extent;
-            let max = capabilities.max_image_extent;
-            let width = WIDTH.min(max.width).max(min.width);
-            let height = HEIGHT.min(max.height).max(min.height);
-            vk::Extent2D { width, height }
-        }
-    };
-    log::debug!("Swapchain extent: {:?}", extent);
-
-    // Swapchain image count
-    let image_count = capabilities.min_image_count;
-    log::debug!("Swapchain image count: {:?}", image_count);
-
-    // Swapchain
-    let families_indices = [graphics_q_index, present_q_index];
-    let create_info = {
-        let mut builder = vk::SwapchainCreateInfoKHR::builder()
-            .surface(surface_khr)
-            .min_image_count(image_count)
-            .image_format(format.format)
-            .image_color_space(format.color_space)
-            .image_extent(extent)
-            .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT);
-
-        builder = if graphics_q_index != present_q_index {
-            builder
-                .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&families_indices)
-        } else {
-            builder.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        };
-
-        builder
-            .pre_transform(capabilities.current_transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
-            .clipped(true)
-    };
-
-    let swapchain = Swapchain::new(instance, device);
-    let swapchain_khr = unsafe { swapchain.create_swapchain(&create_info, None)? };
-
-    // Swapchain images and image views
-    let images = unsafe { swapchain.get_swapchain_images(swapchain_khr)? };
-    let views = images
-        .iter()
-        .map(|image| {
-            let create_info = vk::ImageViewCreateInfo::builder()
-                .image(*image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(format.format)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            unsafe { device.create_image_view(&create_info, None) }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok((
-        swapchain,
-        swapchain_khr,
-        extent,
-        format.format,
-        images,
-        views,
-    ))
-}
-
 fn create_vulkan_pipeline(
     device: &Device,
     extent: vk::Extent2D,
     format: vk::Format,
 ) -> Result<(vk::Pipeline, vk::PipelineLayout), Box<dyn Error>> {
     log::debug!("Creating vulkan pipeline");
-    let layout_info = vk::PipelineLayoutCreateInfo::builder();
+    let layout_info = vk::PipelineLayoutCreateInfo::default();
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
 
     let entry_point_name = CString::new("main")?;
 
     let vertex_source =
         read_shader_from_bytes(&include_bytes!("../../assets/shaders/shader.vert.spv")[..])?;
-    let vertex_create_info = vk::ShaderModuleCreateInfo::builder().code(&vertex_source);
+    let vertex_create_info = vk::ShaderModuleCreateInfo::default().code(&vertex_source);
     let vertex_module = unsafe { device.create_shader_module(&vertex_create_info, None)? };
 
     let fragment_source =
         read_shader_from_bytes(&include_bytes!("../../assets/shaders/shader.frag.spv")[..])?;
-    let fragment_create_info = vk::ShaderModuleCreateInfo::builder().code(&fragment_source);
+    let fragment_create_info = vk::ShaderModuleCreateInfo::default().code(&fragment_source);
     let fragment_module = unsafe { device.create_shader_module(&fragment_create_info, None)? };
 
     let shader_states_infos = [
-        vk::PipelineShaderStageCreateInfo::builder()
+        vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(vertex_module)
-            .name(&entry_point_name)
-            .build(),
-        vk::PipelineShaderStageCreateInfo::builder()
+            .name(&entry_point_name),
+        vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(fragment_module)
-            .name(&entry_point_name)
-            .build(),
+            .name(&entry_point_name),
     ];
 
-    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder();
+    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
 
-    let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
+    let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
         .primitive_restart_enable(false);
 
@@ -804,11 +578,11 @@ fn create_vulkan_pipeline(
         offset: vk::Offset2D { x: 0, y: 0 },
         extent,
     }];
-    let viewport_info = vk::PipelineViewportStateCreateInfo::builder()
+    let viewport_info = vk::PipelineViewportStateCreateInfo::default()
         .viewports(&viewports)
         .scissors(&scissors);
 
-    let rasterizer_info = vk::PipelineRasterizationStateCreateInfo::builder()
+    let rasterizer_info = vk::PipelineRasterizationStateCreateInfo::default()
         .depth_clamp_enable(false)
         .rasterizer_discard_enable(false)
         .polygon_mode(vk::PolygonMode::FILL)
@@ -820,14 +594,14 @@ fn create_vulkan_pipeline(
         .depth_bias_clamp(0.0)
         .depth_bias_slope_factor(0.0);
 
-    let multisampling_info = vk::PipelineMultisampleStateCreateInfo::builder()
+    let multisampling_info = vk::PipelineMultisampleStateCreateInfo::default()
         .sample_shading_enable(false)
         .rasterization_samples(vk::SampleCountFlags::TYPE_1)
         .min_sample_shading(1.0)
         .alpha_to_coverage_enable(false)
         .alpha_to_one_enable(false);
 
-    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::builder()
+    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
         .color_write_mask(vk::ColorComponentFlags::RGBA)
         .blend_enable(false)
         .src_color_blend_factor(vk::BlendFactor::ONE)
@@ -835,19 +609,18 @@ fn create_vulkan_pipeline(
         .color_blend_op(vk::BlendOp::ADD)
         .src_alpha_blend_factor(vk::BlendFactor::ONE)
         .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .build()];
-    let color_blending_info = vk::PipelineColorBlendStateCreateInfo::builder()
+        .alpha_blend_op(vk::BlendOp::ADD)];
+    let color_blending_info = vk::PipelineColorBlendStateCreateInfo::default()
         .logic_op_enable(false)
         .logic_op(vk::LogicOp::COPY)
         .attachments(&color_blend_attachments)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
 
     let color_attachment_formats = [format];
-    let mut rendering_info = vk::PipelineRenderingCreateInfo::builder()
+    let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
         .color_attachment_formats(&color_attachment_formats);
 
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_states_infos)
         .vertex_input_state(&vertex_input_info)
         .input_assembly_state(&input_assembly_info)
@@ -876,11 +649,6 @@ fn create_vulkan_pipeline(
     Ok((pipeline, pipeline_layout))
 }
 
-fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>, Box<dyn Error>> {
-    let mut cursor = std::io::Cursor::new(bytes);
-    Ok(ash::util::read_spv(&mut cursor)?)
-}
-
 fn create_and_record_command_buffers(
     device: &Device,
     pool: vk::CommandPool,
@@ -892,7 +660,7 @@ fn create_and_record_command_buffers(
 ) -> Result<Vec<vk::CommandBuffer>, Box<dyn Error>> {
     log::debug!("Creating and recording command buffers");
     let buffers = {
-        let allocate_info = vk::CommandBufferAllocateInfo::builder()
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(count as _);
@@ -903,11 +671,10 @@ fn create_and_record_command_buffers(
     for (index, buffer) in buffers.iter().enumerate() {
         let buffer = *buffer;
 
-        let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
         unsafe { device.begin_command_buffer(buffer, &command_buffer_begin_info)? };
 
-        let image_memory_barrier = vk::ImageMemoryBarrier2::builder()
+        let image_memory_barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
             .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_READ)
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -922,12 +689,12 @@ fn create_and_record_command_buffers(
                 ..Default::default()
             });
 
-        let dependency_info = vk::DependencyInfo::builder()
+        let dependency_info = vk::DependencyInfo::default()
             .image_memory_barriers(std::slice::from_ref(&image_memory_barrier));
 
         unsafe { device.cmd_pipeline_barrier2(buffer, &dependency_info) };
 
-        let color_attachment_info = vk::RenderingAttachmentInfo::builder()
+        let color_attachment_info = vk::RenderingAttachmentInfo::default()
             .image_view(image_views[index])
             .image_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -938,7 +705,7 @@ fn create_and_record_command_buffers(
                 },
             });
 
-        let rendering_info = vk::RenderingInfo::builder()
+        let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent,
@@ -954,12 +721,12 @@ fn create_and_record_command_buffers(
 
         unsafe { device.cmd_end_rendering(buffer) };
 
-        let image_memory_barrier = vk::ImageMemoryBarrier2::builder()
+        let image_memory_barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
             .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
             .old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
             .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_READ)
+            .dst_access_mask(vk::AccessFlags2::empty())
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
             .image(images[index])
             .subresource_range(vk::ImageSubresourceRange {
@@ -969,7 +736,7 @@ fn create_and_record_command_buffers(
                 ..Default::default()
             });
 
-        let dependency_info = vk::DependencyInfo::builder()
+        let dependency_info = vk::DependencyInfo::default()
             .image_memory_barriers(std::slice::from_ref(&image_memory_barrier));
 
         unsafe { device.cmd_pipeline_barrier2(buffer, &dependency_info) };
