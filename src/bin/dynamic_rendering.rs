@@ -530,7 +530,7 @@ fn create_vulkan_device_and_graphics_and_present_qs(
     let device_extensions_ptrs = [
         swapchain::NAME.as_ptr(),
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ash::khr::portability_subset::NAME,
+        ash::khr::portability_subset::NAME.as_ptr(),
     ];
 
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
