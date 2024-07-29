@@ -13,8 +13,10 @@ use vk_triangle_rs::{
     create_vulkan_instance, create_vulkan_swapchain, create_window, read_shader_from_bytes,
 };
 use winit::{
-    event::{Event, WindowEvent},
-    window::Window,
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId},
 };
 
 const WIDTH: u32 = 800;
@@ -24,47 +26,65 @@ const APP_NAME: &str = "Triangle (dynamic_rendering)";
 fn main() -> Result<(), Box<dyn Error>> {
     SimpleLogger::default().env().init()?;
 
-    let (window, event_loop) = create_window(APP_NAME, WIDTH, HEIGHT)?;
-    let mut app = Triangle::new(&window)?;
-    let mut is_swapchain_dirty = false;
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
 
-    event_loop.run(move |event, elwt| {
-        match event {
-            // On resize
-            Event::WindowEvent {
-                event: WindowEvent::Resized(..),
-                ..
-            } => {
-                log::debug!("Window has been resized");
-                is_swapchain_dirty = true;
-            }
-            // Draw
-            Event::AboutToWait => {
-                if is_swapchain_dirty {
-                    let dim = window.inner_size();
-                    if dim.width > 0 && dim.height > 0 {
-                        app.recreate_swapchain().expect("Failed to recreate swap");
-                    } else {
-                        return;
-                    }
-                }
-
-                is_swapchain_dirty = app.draw().expect("Failed to tick");
-            }
-            // Exit app on request to close window
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => elwt.exit(),
-            // Wait for gpu to finish pending work before closing app
-            Event::LoopExiting => app
-                .wait_for_gpu()
-                .expect("Failed to wait for gpu to finish work"),
-            _ => (),
-        }
-    })?;
+    let mut app = App::default();
+    event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+#[derive(Default)]
+struct App {
+    window: Option<Window>,
+    triangle: Option<Triangle>,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let window = create_window(event_loop, APP_NAME, WIDTH, HEIGHT).unwrap();
+
+        self.triangle = Some(Triangle::new(&window).unwrap());
+        self.window = Some(window);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::Resized { .. } => {
+                log::debug!("Window has been resized");
+                self.triangle.as_mut().unwrap().is_swapchain_dirty = true;
+            }
+            _ => (),
+        }
+    }
+
+    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+        let app = self.triangle.as_mut().unwrap();
+        let window = self.window.as_ref().unwrap();
+
+        if app.is_swapchain_dirty {
+            let dim = window.inner_size();
+            if dim.width > 0 && dim.height > 0 {
+                app.recreate_swapchain().expect("Failed to recreate swap");
+            } else {
+                return;
+            }
+        }
+
+        app.is_swapchain_dirty = app.draw().expect("Failed to tick");
+    }
+
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.triangle
+            .as_ref()
+            .unwrap()
+            .wait_for_gpu()
+            .expect("Failed to wait for gpu to finish work");
+    }
 }
 
 struct Triangle {
@@ -91,6 +111,7 @@ struct Triangle {
     image_available_semaphore: vk::Semaphore,
     render_finished_semaphore: vk::Semaphore,
     fence: vk::Fence,
+    is_swapchain_dirty: bool,
 }
 
 impl Triangle {
@@ -212,6 +233,7 @@ impl Triangle {
             image_available_semaphore,
             render_finished_semaphore,
             fence,
+            is_swapchain_dirty: false,
         })
     }
 
@@ -284,13 +306,13 @@ impl Triangle {
 
     fn draw(&mut self) -> Result<bool, Box<dyn Error>> {
         let fence = self.fence;
-        unsafe { self.device.wait_for_fences(&[fence], true, std::u64::MAX)? };
+        unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX)? };
 
         // Drawing the frame
         let next_image_result = unsafe {
             self.swapchain.acquire_next_image(
                 self.swapchain_khr,
-                std::u64::MAX,
+                u64::MAX,
                 self.image_available_semaphore,
                 vk::Fence::null(),
             )

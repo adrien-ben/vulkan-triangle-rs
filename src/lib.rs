@@ -9,28 +9,21 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_void,
 };
-use winit::{
-    dpi::PhysicalSize,
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
-};
+use winit::{dpi::PhysicalSize, event_loop::ActiveEventLoop, window::Window};
 
 pub fn create_window(
+    event_loop: &ActiveEventLoop,
     app_name: &str,
     width: u32,
     height: u32,
-) -> Result<(Window, EventLoop<()>), Box<dyn Error>> {
-    log::debug!("Creating window and event loop");
-    let events_loop = EventLoop::new()?;
-    events_loop.set_control_flow(ControlFlow::Poll);
-    let window = WindowBuilder::new()
-        .with_title(app_name)
-        .with_inner_size(PhysicalSize::new(width, height))
-        .with_resizable(true)
-        .build(&events_loop)
-        .unwrap();
-
-    Ok((window, events_loop))
+) -> Result<Window, Box<dyn Error>> {
+    log::debug!("Creating window");
+    let window = event_loop.create_window(
+        Window::default_attributes()
+            .with_title(app_name)
+            .with_inner_size(PhysicalSize::new(width, height)),
+    )?;
+    Ok(window)
 }
 
 pub fn create_vulkan_instance(
@@ -187,7 +180,7 @@ pub fn create_vulkan_swapchain(
 
     // Swapchain extent
     let extent = {
-        if capabilities.current_extent.width != std::u32::MAX {
+        if capabilities.current_extent.width != u32::MAX {
             capabilities.current_extent
         } else {
             let min = capabilities.min_image_extent;
